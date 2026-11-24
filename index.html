@@ -433,7 +433,7 @@
         <input id="q" type="search" placeholder="Search resources…" aria-label="Search resources">
       </div>
       <button class="btn" title="Language"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/></svg>Español</button>
-      <button class="btn" title="Admin"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>Admin</button>
+      <button class="btn" title="Admin" onclick="openAdmin()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>Admin</button>
     </div>
   </div>
 </header>
@@ -955,4 +955,309 @@ document.getElementById("grants").innerHTML = GRANTS.map(actionCard).join("");
 document.getElementById("kern-med").innerHTML = KERN_MED.map(simpleCard).join("");
 document.getElementById("crisis-grid").innerHTML = CRISIS.map(crisisCard).join("");
 buildCatGrid();
+</script>
+
+<!-- =========================================================
+     Analytics + Admin panel
+     ========================================================= -->
+<style>
+  /* Admin modal */
+  .adm-backdrop{position:fixed;inset:0;background:rgba(10,20,40,.55);backdrop-filter:blur(3px);z-index:10000;display:none;align-items:flex-start;justify-content:center;padding:40px 16px;overflow-y:auto}
+  .adm-backdrop.open{display:flex}
+  .adm-panel{background:#fff;color:#0f172a;max-width:960px;width:100%;border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.35);padding:28px;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  .adm-panel h2{margin:0 0 4px;font-size:22px}
+  .adm-panel .adm-sub{color:#475569;font-size:13px;margin-bottom:20px}
+  .adm-panel .adm-close{float:right;background:transparent;border:0;font-size:22px;cursor:pointer;color:#64748b}
+  .adm-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px}
+  .adm-tile{background:#f1f5f9;border-radius:10px;padding:14px}
+  .adm-tile .adm-num{font-size:24px;font-weight:700;color:#0f172a}
+  .adm-tile .adm-lbl{font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;margin-top:2px}
+  .adm-section{margin-top:20px;border-top:1px solid #e2e8f0;padding-top:18px}
+  .adm-section h3{margin:0 0 10px;font-size:14px;text-transform:uppercase;letter-spacing:.05em;color:#334155}
+  .adm-list{list-style:none;margin:0;padding:0;font-size:13px}
+  .adm-list li{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed #e2e8f0}
+  .adm-list li:last-child{border-bottom:0}
+  .adm-list .adm-k{color:#0f172a;max-width:70%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .adm-list .adm-v{color:#2563eb;font-weight:600;font-variant-numeric:tabular-nums}
+  .adm-log{background:#0f172a;color:#cbd5e1;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;padding:12px;border-radius:8px;max-height:220px;overflow-y:auto;white-space:pre-wrap;line-height:1.5}
+  .adm-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+  .adm-btn{background:#2563eb;color:#fff;border:0;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer}
+  .adm-btn.secondary{background:#e2e8f0;color:#0f172a}
+  .adm-btn.danger{background:#dc2626}
+  .adm-note{background:#fef3c7;border:1px solid #fcd34d;color:#92400e;padding:10px 12px;border-radius:8px;font-size:12px;margin-top:16px;line-height:1.5}
+  .adm-code{background:#f1f5f9;border-radius:6px;padding:2px 6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px}
+</style>
+
+<div class="adm-backdrop" id="adm-backdrop" onclick="if(event.target===this)closeAdmin()">
+  <div class="adm-panel" role="dialog" aria-modal="true" aria-labelledby="adm-title">
+    <button class="adm-close" onclick="closeAdmin()" aria-label="Close">&times;</button>
+    <h2 id="adm-title">Analytics — this browser</h2>
+    <div class="adm-sub">Visitor engagement collected on your device since you first opened the directory here.</div>
+
+    <div class="adm-tiles" id="adm-tiles"></div>
+
+    <div class="adm-section">
+      <h3>Most-clicked resources</h3>
+      <ul class="adm-list" id="adm-top-clicks"></ul>
+    </div>
+
+    <div class="adm-section">
+      <h3>Most-opened categories</h3>
+      <ul class="adm-list" id="adm-top-cats"></ul>
+    </div>
+
+    <div class="adm-section">
+      <h3>Search terms tried</h3>
+      <ul class="adm-list" id="adm-top-searches"></ul>
+    </div>
+
+    <div class="adm-section">
+      <h3>Recent events (this session)</h3>
+      <div class="adm-log" id="adm-log"></div>
+      <div class="adm-actions">
+        <button class="adm-btn" onclick="exportAnalytics()">Download event log (JSON)</button>
+        <button class="adm-btn secondary" onclick="refreshAdmin()">Refresh</button>
+        <button class="adm-btn danger" onclick="clearAnalytics()">Clear data on this device</button>
+      </div>
+    </div>
+
+    <div class="adm-note">
+      <strong>Why only this browser?</strong> This file is a static page, so without a backend
+      it can only read events saved on the current device. To see <em>every</em> visitor's data
+      in one dashboard, paste a Google Analytics Measurement ID into
+      <span class="adm-code">GA_ID</span> near the top of this file's analytics script,
+      or set <span class="adm-code">BEACON_URL</span> to your own collector endpoint
+      and events will POST there automatically.
+    </div>
+  </div>
+</div>
+
+<script>
+/* ---------- Config ---------- */
+// Paste a Google Analytics 4 Measurement ID (looks like "G-XXXXXXXXXX") to send
+// all events to GA. Leave empty to keep tracking local-only on this browser.
+const GA_ID = "";
+// Or point at your own collector that accepts POSTed JSON. Leave empty to disable.
+const BEACON_URL = "";
+// Password to open the Admin panel. Change this. (Anyone who views the page source
+// can see it — don't treat it as real security, just a casual gate.)
+const ADMIN_PASS = "ekccf2026";
+
+/* ---------- Load Google Analytics if an ID is configured ---------- */
+if (GA_ID) {
+  const s = document.createElement("script");
+  s.async = true;
+  s.src = "https://www.googletagmanager.com/gtag/js?id=" + GA_ID;
+  document.head.appendChild(s);
+  window.dataLayer = window.dataLayer || [];
+  window.gtag = function(){ dataLayer.push(arguments); };
+  gtag("js", new Date());
+  gtag("config", GA_ID, { anonymize_ip: true });
+}
+
+/* ---------- Event store (local) ---------- */
+const AN_KEY = "ekccf-analytics-v1";
+const SESSION_START = Date.now();
+const SESSION_ID = Math.random().toString(36).slice(2, 10);
+
+function anLoad(){
+  try { return JSON.parse(localStorage.getItem(AN_KEY) || "null") || anFresh(); }
+  catch(e){ return anFresh(); }
+}
+function anFresh(){
+  return { first_seen: Date.now(), sessions: 0, total_ms: 0, events: [],
+           clicks: {}, categories: {}, searches: {}, max_scroll: 0 };
+}
+function anSave(st){
+  try {
+    // cap events at 500 so localStorage stays small
+    if (st.events.length > 500) st.events = st.events.slice(-500);
+    localStorage.setItem(AN_KEY, JSON.stringify(st));
+  } catch(e){ /* quota: ignore */ }
+}
+let ST = anLoad();
+ST.sessions = (ST.sessions || 0) + 1;
+anSave(ST);
+
+/* ---------- Track an event ---------- */
+function track(kind, payload){
+  const ev = { t: Date.now(), s: SESSION_ID, kind, ...payload };
+  ST.events.push(ev);
+  anSave(ST);
+  if (window.gtag && GA_ID) gtag("event", kind, payload || {});
+  if (BEACON_URL && navigator.sendBeacon) {
+    try { navigator.sendBeacon(BEACON_URL, JSON.stringify(ev)); } catch(e){}
+  }
+}
+
+/* ---------- Scroll-depth tracking ---------- */
+const scrollHits = new Set();
+function onScroll(){
+  const doc = document.documentElement;
+  const h = Math.max(1, doc.scrollHeight - doc.clientHeight);
+  const pct = Math.round((window.scrollY / h) * 100);
+  if (pct > ST.max_scroll){ ST.max_scroll = pct; anSave(ST); }
+  for (const m of [25, 50, 75, 100]){
+    if (pct >= m && !scrollHits.has(m)){
+      scrollHits.add(m);
+      track("scroll_depth", { percent: m });
+    }
+  }
+}
+let scrollTicking = false;
+window.addEventListener("scroll", () => {
+  if (!scrollTicking){
+    requestAnimationFrame(() => { onScroll(); scrollTicking = false; });
+    scrollTicking = true;
+  }
+}, { passive: true });
+
+/* ---------- Time-on-page tracking ---------- */
+function flushTime(){
+  const ms = Date.now() - SESSION_START;
+  ST.total_ms = (ST.total_ms || 0) + ms;
+  anSave(ST);
+  track("session_end", { ms });
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") flushTime();
+});
+window.addEventListener("pagehide", flushTime);
+
+// Report time-on-page milestones while active
+const timeMilestones = [30, 60, 120, 300, 600];
+timeMilestones.forEach(sec => {
+  setTimeout(() => track("time_milestone", { seconds: sec }), sec * 1000);
+});
+
+/* ---------- Click tracking on cards + navigation ---------- */
+document.addEventListener("click", (e) => {
+  // Visit Site links on resource cards
+  const a = e.target.closest("a.visit");
+  if (a){
+    const card = a.closest(".card");
+    const title = card ? (card.querySelector("h3")?.textContent || "").trim() : a.href;
+    ST.clicks[title] = (ST.clicks[title] || 0) + 1;
+    anSave(ST);
+    track("resource_click", { title, url: a.href });
+    return;
+  }
+  // Category tiles in the browse grid
+  const catTile = e.target.closest(".cat-tile");
+  if (catTile){
+    const name = catTile.querySelector(".cat-name")?.textContent?.trim()
+              || catTile.textContent.trim().split("\n")[0].trim();
+    ST.categories[name] = (ST.categories[name] || 0) + 1;
+    anSave(ST);
+    track("category_open", { name });
+    return;
+  }
+  // Crisis hotline click
+  const crisis = e.target.closest(".crisis-card a[href^='tel:']");
+  if (crisis){
+    const line = crisis.closest(".crisis-card")?.querySelector(".name")?.textContent?.trim() || "crisis";
+    track("crisis_call", { line });
+  }
+});
+
+/* ---------- Search tracking (debounced) ---------- */
+let searchTimer = null;
+const searchInput = document.getElementById("q");
+if (searchInput){
+  searchInput.addEventListener("input", (e) => {
+    clearTimeout(searchTimer);
+    const term = e.target.value.trim();
+    if (!term || term.length < 3) return;
+    searchTimer = setTimeout(() => {
+      ST.searches[term] = (ST.searches[term] || 0) + 1;
+      anSave(ST);
+      track("search", { term });
+    }, 800);
+  });
+}
+
+/* ---------- Section-visible tracking (which sections got seen) ---------- */
+const seen = new Set();
+const io = new IntersectionObserver((entries) => {
+  for (const e of entries){
+    if (e.isIntersecting && !seen.has(e.target.id)){
+      seen.add(e.target.id);
+      track("section_view", { section: e.target.id });
+    }
+  }
+}, { threshold: 0.4 });
+["emergency","results","browse","cat-view","grants-section","rx","finance","kern"].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) io.observe(el);
+});
+
+track("page_view", { path: location.pathname });
+
+/* ---------- Admin panel ---------- */
+function openAdmin(){
+  const p = prompt("Admin password:");
+  if (p === null) return;
+  if (p !== ADMIN_PASS){ alert("Wrong password."); return; }
+  refreshAdmin();
+  document.getElementById("adm-backdrop").classList.add("open");
+}
+function closeAdmin(){
+  document.getElementById("adm-backdrop").classList.remove("open");
+}
+function fmtMs(ms){
+  if (!ms) return "0s";
+  const s = Math.round(ms/1000);
+  if (s < 60) return s + "s";
+  const m = Math.floor(s/60), rs = s % 60;
+  if (m < 60) return m + "m " + rs + "s";
+  const h = Math.floor(m/60), rm = m % 60;
+  return h + "h " + rm + "m";
+}
+function topN(obj, n){
+  return Object.entries(obj || {}).sort((a,b) => b[1]-a[1]).slice(0, n);
+}
+function refreshAdmin(){
+  ST = anLoad();
+  const liveMs = (ST.total_ms || 0) + (Date.now() - SESSION_START);
+  const sessions = ST.sessions || 1;
+  const clicks = Object.values(ST.clicks || {}).reduce((a,b) => a+b, 0);
+  const searches = Object.values(ST.searches || {}).reduce((a,b) => a+b, 0);
+  const cats = Object.values(ST.categories || {}).reduce((a,b) => a+b, 0);
+  const since = ST.first_seen ? new Date(ST.first_seen).toLocaleDateString() : "today";
+  document.getElementById("adm-tiles").innerHTML = `
+    <div class="adm-tile"><div class="adm-num">${sessions}</div><div class="adm-lbl">Sessions since ${since}</div></div>
+    <div class="adm-tile"><div class="adm-num">${fmtMs(liveMs)}</div><div class="adm-lbl">Total time on site</div></div>
+    <div class="adm-tile"><div class="adm-num">${ST.max_scroll || 0}%</div><div class="adm-lbl">Max scroll depth</div></div>
+    <div class="adm-tile"><div class="adm-num">${clicks}</div><div class="adm-lbl">Resource clicks</div></div>
+    <div class="adm-tile"><div class="adm-num">${cats}</div><div class="adm-lbl">Category opens</div></div>
+    <div class="adm-tile"><div class="adm-num">${searches}</div><div class="adm-lbl">Searches</div></div>
+  `;
+  const li = (pair) => `<li><span class="adm-k">${pair[0].replace(/</g,"&lt;")}</span><span class="adm-v">${pair[1]}</span></li>`;
+  document.getElementById("adm-top-clicks").innerHTML = topN(ST.clicks, 10).map(li).join("") || "<li><span class='adm-k'>No clicks yet</span><span class='adm-v'>—</span></li>";
+  document.getElementById("adm-top-cats").innerHTML = topN(ST.categories, 10).map(li).join("") || "<li><span class='adm-k'>No category opens yet</span><span class='adm-v'>—</span></li>";
+  document.getElementById("adm-top-searches").innerHTML = topN(ST.searches, 10).map(li).join("") || "<li><span class='adm-k'>No searches yet</span><span class='adm-v'>—</span></li>";
+
+  const log = (ST.events || []).slice(-50).reverse().map(e => {
+    const dt = new Date(e.t).toLocaleTimeString();
+    const rest = Object.entries(e).filter(([k]) => k !== "t" && k !== "kind" && k !== "s")
+      .map(([k,v]) => k + "=" + (typeof v === "string" ? v.slice(0,60) : v)).join("  ");
+    return `${dt}  ${e.kind}  ${rest}`;
+  }).join("\n") || "No events recorded yet. Scroll, click a card, or run a search.";
+  document.getElementById("adm-log").textContent = log;
+}
+function exportAnalytics(){
+  const blob = new Blob([JSON.stringify(ST, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "ekccf-analytics-" + new Date().toISOString().slice(0,10) + ".json";
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+function clearAnalytics(){
+  if (!confirm("Wipe all collected analytics on this device? Cannot be undone.")) return;
+  ST = anFresh(); ST.sessions = 1; anSave(ST);
+  refreshAdmin();
+}
+// ESC to close admin
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeAdmin(); });
 </script>

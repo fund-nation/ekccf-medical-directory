@@ -1012,22 +1012,21 @@ buildCatGrid();
     </div>
 
     <div class="adm-section">
-      <h3>Recent events (this session)</h3>
+      <h3 id="adm-log-head">Recent events</h3>
       <div class="adm-log" id="adm-log"></div>
       <div class="adm-actions">
+        <button class="adm-btn" id="adm-pull" onclick="pullServerEvents()" hidden>Pull from server</button>
         <button class="adm-btn" onclick="exportAnalytics()">Download event log (JSON)</button>
         <button class="adm-btn secondary" onclick="refreshAdmin()">Refresh</button>
         <button class="adm-btn danger" onclick="clearAnalytics()">Clear data on this device</button>
       </div>
     </div>
 
-    <div class="adm-note">
-      <strong>Why only this browser?</strong> This file is a static page, so without a backend
-      it can only read events saved on the current device. To see <em>every</em> visitor's data
-      in one dashboard, paste a Google Analytics Measurement ID into
-      <span class="adm-code">GA_ID</span> near the top of this file's analytics script,
-      or set <span class="adm-code">BEACON_URL</span> to your own collector endpoint
-      and events will POST there automatically.
+    <div class="adm-note" id="adm-note">
+      <strong>Local-only mode.</strong> You're seeing events saved on this device only. To
+      see <em>every</em> visitor's data in one dashboard, deploy this folder to Vercel and
+      paste the deployment URL into <span class="adm-code">DEPLOY_URL</span> near the top
+      of the analytics script. Setup instructions are in <span class="adm-code">README-ANALYTICS.md</span>.
     </div>
   </div>
 </div>
@@ -1037,10 +1036,16 @@ buildCatGrid();
 // Paste a Google Analytics 4 Measurement ID (looks like "G-XXXXXXXXXX") to send
 // all events to GA. Leave empty to keep tracking local-only on this browser.
 const GA_ID = "";
-// Or point at your own collector that accepts POSTed JSON. Leave empty to disable.
-const BEACON_URL = "";
-// Password to open the Admin panel. Change this. (Anyone who views the page source
-// can see it — don't treat it as real security, just a casual gate.)
+// Your deployed Vercel URL (no trailing slash). Example:
+//   const DEPLOY_URL = "https://ekccf-medical-directory.vercel.app";
+// Leave empty to keep tracking local-only on this browser.
+const DEPLOY_URL = "";
+const BEACON_URL = DEPLOY_URL ? DEPLOY_URL + "/api/track" : "";
+const EVENTS_URL = DEPLOY_URL ? DEPLOY_URL + "/api/events" : "";
+// Password to open the Admin panel AND to pull server events. MUST match the
+// ADMIN_PASS environment variable you set in the Vercel dashboard.
+// Anyone who views the page source can see it — don't treat it as real
+// security, just a casual gate.
 const ADMIN_PASS = "ekccf2026";
 
 /* ---------- Load Google Analytics if an ID is configured ---------- */
@@ -1216,34 +1221,119 @@ function fmtMs(ms){
 function topN(obj, n){
   return Object.entries(obj || {}).sort((a,b) => b[1]-a[1]).slice(0, n);
 }
-function refreshAdmin(){
-  ST = anLoad();
-  const liveMs = (ST.total_ms || 0) + (Date.now() - SESSION_START);
-  const sessions = ST.sessions || 1;
-  const clicks = Object.values(ST.clicks || {}).reduce((a,b) => a+b, 0);
-  const searches = Object.values(ST.searches || {}).reduce((a,b) => a+b, 0);
-  const cats = Object.values(ST.categories || {}).reduce((a,b) => a+b, 0);
-  const since = ST.first_seen ? new Date(ST.first_seen).toLocaleDateString() : "today";
+let SERVER_EVENTS = null; // populated by pullServerEvents()
+
+// Aggregate an array of raw events into the same shape ST uses.
+function aggregate(events){
+  const agg = { sessions: new Set(), total_ms: 0, max_scroll: 0,
+                clicks: {}, categories: {}, searches: {}, sections: {},
+                session_times: {}, first_seen: 0 };
+  for (const e of events){
+    if (!e || !e.kind) continue;
+    if (e.s) agg.sessions.add(e.s);
+    if (!agg.first_seen || (e.t && e.t < agg.first_seen)) agg.first_seen = e.t;
+    if (e.kind === "scroll_depth" && e.percent > agg.max_scroll) agg.max_scroll = e.percent;
+    if (e.kind === "resource_click" && e.title) agg.clicks[e.title] = (agg.clicks[e.title]||0)+1;
+    if (e.kind === "category_open" && e.name) agg.categories[e.name] = (agg.categories[e.name]||0)+1;
+    if (e.kind === "search" && e.term) agg.searches[e.term] = (agg.searches[e.term]||0)+1;
+    if (e.kind === "section_view" && e.section) agg.sections[e.section] = (agg.sections[e.section]||0)+1;
+    if (e.kind === "session_end" && e.ms) agg.total_ms += e.ms;
+    if (e.kind === "time_milestone" && e.s){
+      agg.session_times[e.s] = Math.max(agg.session_times[e.s]||0, (e.seconds||0) * 1000);
+    }
+  }
+  // Add any in-flight sessions whose session_end hasn't fired
+  for (const ms of Object.values(agg.session_times)) agg.total_ms += ms;
+  agg.sessions = agg.sessions.size;
+  return agg;
+}
+
+function renderAgg(agg, sourceLabel){
+  const since = agg.first_seen ? new Date(agg.first_seen).toLocaleDateString() : "today";
+  const clicks = Object.values(agg.clicks).reduce((a,b) => a+b, 0);
+  const searches = Object.values(agg.searches).reduce((a,b) => a+b, 0);
+  const cats = Object.values(agg.categories).reduce((a,b) => a+b, 0);
   document.getElementById("adm-tiles").innerHTML = `
-    <div class="adm-tile"><div class="adm-num">${sessions}</div><div class="adm-lbl">Sessions since ${since}</div></div>
-    <div class="adm-tile"><div class="adm-num">${fmtMs(liveMs)}</div><div class="adm-lbl">Total time on site</div></div>
-    <div class="adm-tile"><div class="adm-num">${ST.max_scroll || 0}%</div><div class="adm-lbl">Max scroll depth</div></div>
+    <div class="adm-tile"><div class="adm-num">${agg.sessions || 0}</div><div class="adm-lbl">${sourceLabel} sessions since ${since}</div></div>
+    <div class="adm-tile"><div class="adm-num">${fmtMs(agg.total_ms)}</div><div class="adm-lbl">Total time on site</div></div>
+    <div class="adm-tile"><div class="adm-num">${agg.max_scroll || 0}%</div><div class="adm-lbl">Max scroll depth</div></div>
     <div class="adm-tile"><div class="adm-num">${clicks}</div><div class="adm-lbl">Resource clicks</div></div>
     <div class="adm-tile"><div class="adm-num">${cats}</div><div class="adm-lbl">Category opens</div></div>
     <div class="adm-tile"><div class="adm-num">${searches}</div><div class="adm-lbl">Searches</div></div>
   `;
   const li = (pair) => `<li><span class="adm-k">${pair[0].replace(/</g,"&lt;")}</span><span class="adm-v">${pair[1]}</span></li>`;
-  document.getElementById("adm-top-clicks").innerHTML = topN(ST.clicks, 10).map(li).join("") || "<li><span class='adm-k'>No clicks yet</span><span class='adm-v'>—</span></li>";
-  document.getElementById("adm-top-cats").innerHTML = topN(ST.categories, 10).map(li).join("") || "<li><span class='adm-k'>No category opens yet</span><span class='adm-v'>—</span></li>";
-  document.getElementById("adm-top-searches").innerHTML = topN(ST.searches, 10).map(li).join("") || "<li><span class='adm-k'>No searches yet</span><span class='adm-v'>—</span></li>";
+  const empty = (msg) => `<li><span class='adm-k'>${msg}</span><span class='adm-v'>—</span></li>`;
+  document.getElementById("adm-top-clicks").innerHTML = topN(agg.clicks, 10).map(li).join("") || empty("No clicks yet");
+  document.getElementById("adm-top-cats").innerHTML = topN(agg.categories, 10).map(li).join("") || empty("No category opens yet");
+  document.getElementById("adm-top-searches").innerHTML = topN(agg.searches, 10).map(li).join("") || empty("No searches yet");
+}
 
-  const log = (ST.events || []).slice(-50).reverse().map(e => {
-    const dt = new Date(e.t).toLocaleTimeString();
-    const rest = Object.entries(e).filter(([k]) => k !== "t" && k !== "kind" && k !== "s")
-      .map(([k,v]) => k + "=" + (typeof v === "string" ? v.slice(0,60) : v)).join("  ");
+function refreshAdmin(){
+  ST = anLoad();
+  // Always compute local agg
+  const localAgg = aggregate(ST.events || []);
+  // live time-on-site adjustment: add elapsed since SESSION_START
+  localAgg.total_ms += (Date.now() - SESSION_START);
+
+  let agg, label, events, headText;
+  if (SERVER_EVENTS){
+    agg = aggregate(SERVER_EVENTS);
+    label = "All-visitor";
+    events = SERVER_EVENTS;
+    headText = `Recent events (server, ${events.length} loaded)`;
+  } else {
+    agg = localAgg;
+    label = "This browser";
+    events = ST.events || [];
+    headText = "Recent events (this browser)";
+  }
+  renderAgg(agg, label);
+  document.getElementById("adm-log-head").textContent = headText;
+
+  const log = events.slice(-80).reverse().map(e => {
+    const dt = new Date(e.t || e.received_at || Date.now()).toLocaleString();
+    const rest = Object.entries(e).filter(([k]) => !["t","received_at","kind","s","ua","ip_hash","referer"].includes(k))
+      .map(([k,v]) => k + "=" + (typeof v === "string" ? v.slice(0,60) : v))
+      .filter(x => !x.endsWith("=undefined")).join("  ");
     return `${dt}  ${e.kind}  ${rest}`;
   }).join("\n") || "No events recorded yet. Scroll, click a card, or run a search.";
   document.getElementById("adm-log").textContent = log;
+
+  // Show/hide Pull from server button
+  const pullBtn = document.getElementById("adm-pull");
+  const note = document.getElementById("adm-note");
+  if (EVENTS_URL){
+    pullBtn.hidden = false;
+    pullBtn.textContent = SERVER_EVENTS ? "Reload from server" : "Pull from server (all visitors)";
+    note.innerHTML = SERVER_EVENTS
+      ? `<strong>Showing server data.</strong> ${SERVER_EVENTS.length} events across ${agg.sessions} sessions. Click <em>Clear</em> below to wipe your own device's local data (does not touch the server).`
+      : `<strong>Server connected.</strong> Click <em>Pull from server</em> to load events from every visitor.`;
+  } else {
+    pullBtn.hidden = true;
+  }
+}
+
+async function pullServerEvents(){
+  if (!EVENTS_URL){ alert("Set DEPLOY_URL in the HTML first."); return; }
+  const btn = document.getElementById("adm-pull");
+  const original = btn.textContent;
+  btn.textContent = "Loading...";
+  btn.disabled = true;
+  try {
+    const r = await fetch(EVENTS_URL + "?pass=" + encodeURIComponent(ADMIN_PASS) + "&limit=5000");
+    if (!r.ok){
+      alert("Server returned " + r.status + " — check that ADMIN_PASS matches the one set in Vercel.");
+      return;
+    }
+    const data = await r.json();
+    SERVER_EVENTS = data.events || [];
+    refreshAdmin();
+  } catch(e){
+    alert("Fetch failed: " + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
 }
 function exportAnalytics(){
   const blob = new Blob([JSON.stringify(ST, null, 2)], { type: "application/json" });

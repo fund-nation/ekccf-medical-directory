@@ -1,0 +1,9 @@
+{
+  "name": "ekccf-medical-directory",
+  "version": "1.0.0",
+  "private": true,
+  "description": "East Kern medical resources directory with Vercel-hosted analytics backend",
+  "dependencies": {
+    "@vercel/kv": "^3.0.0"
+  }
+}
